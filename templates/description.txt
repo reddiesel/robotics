@@ -1,0 +1,5 @@
+{body}
+
+Source: {source}
+More: {store}
+#robotics #ai #news #technology
