@@ -8,7 +8,7 @@ from moviepy.editor import (
 )
 
 WIDTH, HEIGHT = 1080, 1920
-TARGET_DURATION = 60  # hard cap for Shorts
+TARGET_DURATION = 60  # Shorts hard cap
 FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"  # exists on ubuntu-latest
 
 def _pexels_search(query):
@@ -104,7 +104,7 @@ def _make_text_clip(text, start, duration, y_ratio=0.14, fontsize=60, max_width=
     for ln in lines:
         w_px, _ = draw.textsize(ln, font=font)
         x = (W - w_px) // 2
-        # soft shadow
+        # shadow + white text
         draw.text((x+2, y+2), ln, font=font, fill=(0, 0, 0, 180))
         draw.text((x, y), ln, font=font, fill=(255, 255, 255, 255))
         y += line_h
@@ -166,9 +166,17 @@ def make_short_video(item, script):
     final.write_videofile(out_path, fps=30, codec="libx264", audio_codec="aac",
                           preset="veryfast", threads=2, verbose=False, logger=None)
 
-    # Thumbnail
+    # Thumbnail (save PNG first → convert to RGB JPEG)
     thumb_path = f"thumb_{ts}.jpg"
-    final.save_frame(thumb_path, t=min(0.5, max(0.1, total / 10.0)))
+    frame_time = min(0.5, max(0.1, total / 10.0))
+    temp_png = f"temp_frame_{ts}.png"
+    final.save_frame(temp_png, t=frame_time)
+    img = Image.open(temp_png)
+    if img.mode in ("RGBA", "P"):
+        img = img.convert("RGB")
+    img.save(thumb_path, "JPEG")
+    os.remove(temp_png)
 
     description = f"{body}\n\nSource: {item.get('link','')}\n\nMore: {store}"
     return out_path, thumb_path, title, description, tags
+
