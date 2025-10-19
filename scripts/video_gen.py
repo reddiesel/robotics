@@ -1,4 +1,6 @@
 import os, re, requests, tempfile
+os.environ["IMAGEMAGICK_BINARY"] = "convert"  # use v6 binary name on Ubuntu runners
+
 from datetime import datetime
 from moviepy.editor import (
     VideoFileClip, TextClip, CompositeVideoClip,
@@ -104,7 +106,7 @@ def make_short_video(item, script):
     t = 0.3
     for ln in lines:
         tc = TextClip(
-            ln, fontsize=60, font="Arial-Bold",
+            ln, fontsize=60, font="DejaVu-Sans",
             color="white", method="caption", align="center",
             size=(WIDTH - 120, None)
         )
@@ -116,7 +118,7 @@ def make_short_video(item, script):
     store = os.getenv("STORE_URL", "https://example.com")
     cta = TextClip(
         f"More at {store}",
-        fontsize=40, font="Arial-Bold", color="white",
+        fontsize=40, font="DejaVu-Sans", color="white",
         method="caption", align="center", size=(WIDTH - 120, None)
     ).set_position(("center", HEIGHT * 0.92)).set_start(max(0, total - 8)).set_duration(8)
 
