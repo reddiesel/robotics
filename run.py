@@ -6,7 +6,7 @@ from scripts.upload import upload_short
 
 def main():
     # 1) find topics
-    items = get_robotics_items(limit=3)
+    items = get_robotics_items(limit=1)
     if not items:
         print("No items found."); return
 
