@@ -1,14 +1,15 @@
 import os, re, requests, tempfile
-os.environ["IMAGEMAGICK_BINARY"] = "convert"  # use v6 binary name on Ubuntu runners
-
+import numpy as np
 from datetime import datetime
+from PIL import Image, ImageDraw, ImageFont
 from moviepy.editor import (
-    VideoFileClip, TextClip, CompositeVideoClip,
+    VideoFileClip, ImageClip, CompositeVideoClip,
     AudioFileClip, concatenate_videoclips
 )
 
 WIDTH, HEIGHT = 1080, 1920
-TARGET_DURATION = 75  # seconds (YouTube Shorts max 60, but we’ll trim if needed)
+TARGET_DURATION = 60  # hard cap for Shorts
+FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"  # exists on ubuntu-latest
 
 def _pexels_search(query):
     key = os.getenv("PEXELS_API_KEY")
@@ -55,9 +56,8 @@ def _get_broll():
                 pass
         if len(paths) >= 2:
             break
-    if not paths:
-        if os.path.exists("assets/fallback_stock.mp4"):
-            paths = ["assets/fallback_stock.mp4"]
+    if not paths and os.path.exists("assets/fallback_stock.mp4"):
+        paths = ["assets/fallback_stock.mp4"]
     return paths
 
 def _wrap_text(body):
@@ -67,11 +67,50 @@ def _wrap_text(body):
     for w in words:
         line.append(w)
         if len(" ".join(line)) > 34:
-            lines.append(" ".join(line))
-            line = []
+            lines.append(" ".join(line)); line = []
     if line:
         lines.append(" ".join(line))
     return lines
+
+def _wrap_text_to_width(draw, text, font, max_width):
+    words = text.split()
+    lines, line = [], []
+    for w in words:
+        test = " ".join(line + [w])
+        w_px, _ = draw.textsize(test, font=font)
+        if w_px <= max_width:
+            line.append(w)
+        else:
+            if line:
+                lines.append(" ".join(line))
+            line = [w]
+    if line:
+        lines.append(" ".join(line))
+    return lines
+
+def _make_text_clip(text, start, duration, y_ratio=0.14, fontsize=60, max_width=None):
+    if max_width is None:
+        max_width = WIDTH - 120
+    W, H = max_width, 600
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    font = ImageFont.truetype(FONT_PATH, fontsize)
+
+    lines = _wrap_text_to_width(draw, text, font, max_width=W)
+    line_h = int(fontsize * 1.25)
+    total_h = line_h * max(1, len(lines))
+    y = (H - total_h) // 2
+
+    for ln in lines:
+        w_px, _ = draw.textsize(ln, font=font)
+        x = (W - w_px) // 2
+        # soft shadow
+        draw.text((x+2, y+2), ln, font=font, fill=(0, 0, 0, 180))
+        draw.text((x, y), ln, font=font, fill=(255, 255, 255, 255))
+        y += line_h
+
+    clip = ImageClip(np.array(img)).set_start(start).set_duration(duration)
+    return clip.set_position(("center", int(HEIGHT * y_ratio)))
 
 def make_short_video(item, script):
     title = (script.get("title") or item["title"]).strip()
@@ -79,7 +118,7 @@ def make_short_video(item, script):
     tag_str = script.get("tags", "robotics, ai, news")
     tags = [t.strip() for t in tag_str.split(",") if t.strip()]
 
-    # B-roll
+    # B-roll background
     broll_paths = _get_broll()
     if not broll_paths:
         raise RuntimeError("No b-roll available (Pexels key missing and no fallback asset).")
@@ -96,31 +135,19 @@ def make_short_video(item, script):
         clips.append(clip)
 
     bg = concatenate_videoclips(clips, method="compose")
-    total = min(bg.duration, 60)  # keep within Shorts 60s hard cap
+    total = min(bg.duration, TARGET_DURATION)
 
-    # Caption lines
+    # Captions
     lines = _wrap_text(body)
-    # Spread captions over total duration
     per_line = max(0.9, total / max(8, len(lines)))
-    txt_clips = []
-    t = 0.3
+    txt_clips, t = [], 0.3
     for ln in lines:
-        tc = TextClip(
-            ln, fontsize=60, font="DejaVu-Sans",
-            color="white", method="caption", align="center",
-            size=(WIDTH - 120, None)
-        )
-        tc = tc.set_position(("center", HEIGHT * 0.14)).set_start(t).set_duration(per_line)
-        txt_clips.append(tc)
+        txt_clips.append(_make_text_clip(ln, start=t, duration=per_line, y_ratio=0.14, fontsize=60))
         t += per_line * 0.9
 
     # CTA footer
     store = os.getenv("STORE_URL", "https://example.com")
-    cta = TextClip(
-        f"More at {store}",
-        fontsize=40, font="DejaVu-Sans", color="white",
-        method="caption", align="center", size=(WIDTH - 120, None)
-    ).set_position(("center", HEIGHT * 0.92)).set_start(max(0, total - 8)).set_duration(8)
+    cta = _make_text_clip(f"More at {store}", start=max(0, total - 8), duration=8, y_ratio=0.92, fontsize=40)
 
     final = CompositeVideoClip([bg] + txt_clips + [cta], size=(WIDTH, HEIGHT)).set_duration(total)
 
@@ -133,12 +160,13 @@ def make_short_video(item, script):
         except Exception as e:
             print("Music load failed:", e)
 
-    # Export files
+    # Export
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     out_path = f"out_{ts}.mp4"
-    final.write_videofile(out_path, fps=30, codec="libx264", audio_codec="aac", preset="veryfast", threads=2, verbose=False, logger=None)
+    final.write_videofile(out_path, fps=30, codec="libx264", audio_codec="aac",
+                          preset="veryfast", threads=2, verbose=False, logger=None)
 
-    # Thumbnail from first half-second
+    # Thumbnail
     thumb_path = f"thumb_{ts}.jpg"
     final.save_frame(thumb_path, t=min(0.5, max(0.1, total / 10.0)))
 
